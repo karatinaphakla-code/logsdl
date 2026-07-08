@@ -1,0 +1,97 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    if: ${{ !contains(github.event.head_commit.message, '[skip ci]') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Verify modules
+        run: go mod verify
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test -count=1 ./...
+
+  build-windows:
+    needs: test
+    if: ${{ !contains(github.event.head_commit.message, '[skip ci]') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build logsdl.exe
+        env:
+          TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
+          TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${TELEGRAM_API_ID}" || -z "${TELEGRAM_API_HASH}" || -z "${TELEGRAM_BOT_TOKEN}" ]]; then
+            echo "Missing repo secrets: TELEGRAM_API_ID, TELEGRAM_API_HASH, TELEGRAM_BOT_TOKEN" >&2
+            exit 1
+          fi
+          GOOS=windows GOARCH=amd64 go build \
+            -ldflags "-s -w \
+              -X main.embedAPIID=${TELEGRAM_API_ID} \
+              -X main.embedAPIHash=${TELEGRAM_API_HASH} \
+              -X main.embedBotToken=${TELEGRAM_BOT_TOKEN}" \
+            -o logsdl.exe ./cmd/logsdl
+          ls -lh logsdl.exe
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: logsdl-windows-amd64
+          path: logsdl.exe
+          retention-days: 90
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: logsdl build ${{ github.run_number }}
+          files: logsdl.exe
+          make_latest: true
+          generate_release_notes: true
+
+      - name: Commit logsdl.exe to main
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add logsdl.exe
+          if git diff --staged --quiet; then
+            echo "logsdl.exe unchanged — skip commit"
+            exit 0
+          fi
+          git commit -m "CI: rebuild logsdl.exe [skip ci]"
+          git push

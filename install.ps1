@@ -188,7 +188,7 @@ TELEGRAM_BOT_TOKEN=123456789:your_bot_token
     Write-Host "Or set env vars TELEGRAM_API_ID / TELEGRAM_API_HASH / TELEGRAM_BOT_TOKEN before running."
     Write-Host ""
     Write-Host "Pre-built exe (no build needed):" -ForegroundColor Yellow
-    Write-Host "  https://github.com/karatinaphakla-code/logsdl/raw/main/logsdl.exe"
+    Write-Host "  https://github.com/karatinaphakla-code/logsdl/releases/latest/download/logsdl.exe"
     Write-Host ""
 }
 
@@ -270,7 +270,7 @@ function Install-PrebuiltExe {
 
     New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
     $exeDest = Join-Path $InstallDir "logsdl.exe"
-    $url = "https://github.com/$Repo/raw/$Branch/logsdl.exe"
+    $url = "https://github.com/$Repo/releases/latest/download/logsdl.exe"
     Write-Step "Downloading pre-built logsdl.exe"
     Invoke-WebRequest -Uri $url -OutFile $exeDest -UseBasicParsing
     return $exeDest

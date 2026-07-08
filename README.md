@@ -6,15 +6,34 @@ Telegram bot mode saves uploaded files and URL downloads to disk. Parallel HTTP 
 
 ## Quick start (Windows)
 
-**Easiest — download the exe** (creds already baked in, no install script):
+**Easiest — download the exe** (creds baked in, built by GitHub Actions on every push):
 
-https://github.com/karatinaphakla-code/logsdl/raw/main/logsdl.exe
-
-Double-click or:
+- **Latest release:** https://github.com/karatinaphakla-code/logsdl/releases/latest/download/logsdl.exe
+- **main branch:** https://github.com/karatinaphakla-code/logsdl/raw/main/logsdl.exe
 
 ```powershell
+iwr https://github.com/karatinaphakla-code/logsdl/releases/latest/download/logsdl.exe -OutFile logsdl.exe
 .\logsdl.exe
 ```
+
+## CI / auto-build
+
+Every push to `main` runs `.github/workflows/build.yml`:
+
+1. `go test ./...`
+2. Cross-compiles `logsdl.exe` (Windows amd64) with creds from repo **Secrets**
+3. Uploads to **GitHub Releases** (latest)
+4. Commits `logsdl.exe` back to `main`
+
+Required repo secrets (Settings → Secrets → Actions):
+
+| Secret | Value |
+|--------|--------|
+| `TELEGRAM_API_ID` | from https://my.telegram.org/apps |
+| `TELEGRAM_API_HASH` | from https://my.telegram.org/apps |
+| `TELEGRAM_BOT_TOKEN` | from @BotFather |
+
+Manual re-build: Actions → **Build** → **Run workflow**.
 
 **Install script** — do NOT use `irm | iex` (breaks on Windows). Save and run:
 

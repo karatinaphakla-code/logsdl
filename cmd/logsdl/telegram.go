@@ -21,10 +21,10 @@ import (
 var urlRe = regexp.MustCompile(`https?://[^\s)]+`)
 
 type tgSession struct {
-	mu      sync.Mutex
-	dir     string
-	files   []string
-	active  bool
+	mu     sync.Mutex
+	dir    string
+	files  []string
+	active bool
 }
 
 var (
@@ -129,6 +129,25 @@ func sendOpts() *telegram.SendOptions {
 	return &telegram.SendOptions{ParseMode: "markdown"}
 }
 
+func escapeMd(s string) string {
+	r := strings.NewReplacer("_", "\\_", "*", "\\*", "`", "\\`", "[", "\\[")
+	return r.Replace(s)
+}
+
+func sendText(client *telegram.Client, chatID int64, text string) (*telegram.NewMessage, error) {
+	msg, err := client.SendMessage(chatID, text, sendOpts())
+	if err != nil {
+		log.Printf("send chat=%d failed: %v", chatID, err)
+	}
+	return msg, err
+}
+
+func editStatus(client *telegram.Client, chatID int64, msgID int32, text string) {
+	if _, err := client.EditMessage(chatID, msgID, text, sendOpts()); err != nil {
+		log.Printf("edit chat=%d msg=%d failed: %v", chatID, msgID, err)
+	}
+}
+
 func safeHandleTGMessage(client *telegram.Client, m *telegram.NewMessage, outRoot string, parallel int) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -136,6 +155,7 @@ func safeHandleTGMessage(client *telegram.Client, m *telegram.NewMessage, outRoo
 			reply(client, m, fmt.Sprintf("internal error: %v", r))
 		}
 	}()
+	log.Printf("message chat=%d user=%d cmd=%q doc=%v", m.ChatID(), m.SenderID(), commandName(m), m.Document() != nil)
 	handleTGMessage(client, m, outRoot, parallel)
 }
 
@@ -164,26 +184,30 @@ func handleTGMessage(client *telegram.Client, m *telegram.NewMessage, outRoot st
 	}
 
 	if url := extractURL(m.Text()); url != "" {
-		downloadURL(client, m, url, outRoot, parallel)
+		go downloadURL(client, m, url, outRoot, parallel)
 		return
 	}
 
 	if doc := m.Document(); doc != nil {
-		downloadDoc(client, m, outRoot)
+		go downloadDoc(client, m, outRoot)
 		return
+	}
+
+	if strings.TrimSpace(m.Text()) != "" {
+		reply(client, m, "send a file/document, paste a direct URL, or `/help`")
 	}
 }
 
 func helpTG() string {
 	return strings.Join([]string{
-		"logsdl — download-only bot",
+		"*logsdl* — download-only bot",
 		"",
 		"• send any file or archive",
 		"• paste a direct download URL",
 		"• `/done` — list files saved in this batch",
 		"• `/cancel` — delete current batch folder",
 		"",
-		"Files land on the PC running logsdl (not extracted).",
+		"Files save on the PC running logsdl (not extracted).",
 	}, "\n")
 }
 
@@ -205,7 +229,10 @@ func commandName(m *telegram.NewMessage) string {
 
 func reply(client *telegram.Client, m *telegram.NewMessage, text string) {
 	if _, err := m.Reply(text, sendOpts()); err != nil {
-		log.Printf("reply failed: %v", err)
+		log.Printf("reply chat=%d failed: %v", m.ChatID(), err)
+		if _, err2 := sendText(client, m.ChatID(), text); err2 != nil {
+			log.Printf("fallback send chat=%d failed: %v", m.ChatID(), err2)
+		}
 	}
 }
 
@@ -239,25 +266,26 @@ func listBatch(client *telegram.Client, m *telegram.NewMessage, s *tgSession) {
 		return
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "saved %d file(s) in:\n`%s`\n\n", len(files), dir)
+	fmt.Fprintf(&b, "saved %d file(s) in:\n`%s`\n\n", len(files), escapeMd(dir))
 	for _, f := range files {
 		info, err := os.Stat(f)
 		if err != nil {
-			fmt.Fprintf(&b, "• `%s`\n", filepath.Base(f))
+			fmt.Fprintf(&b, "• `%s`\n", escapeMd(filepath.Base(f)))
 			continue
 		}
-		fmt.Fprintf(&b, "• `%s` (%s)\n", filepath.Base(f), downloader.FormatBytes(info.Size()))
+		fmt.Fprintf(&b, "• `%s` (%s)\n", escapeMd(filepath.Base(f)), downloader.FormatBytes(info.Size()))
 	}
 	reply(client, m, b.String())
 }
 
 func downloadURL(client *telegram.Client, m *telegram.NewMessage, rawURL string, outRoot string, parallel int) {
-	s := getSession(m.ChatID(), outRoot)
+	chatID := m.ChatID()
+	s := getSession(chatID, outRoot)
 	dir := batchDir(s)
 	name := downloader.SanitizeFilename(downloader.NameFromURL(rawURL))
 	dst := filepath.Join(dir, name)
 
-	status, _ := m.Reply(fmt.Sprintf("⬇️ downloading URL…\n`%s`", name), sendOpts())
+	status, _ := sendText(client, chatID, fmt.Sprintf("⬇️ *downloading URL*\n`%s`", escapeMd(name)))
 
 	ctx := context.Background()
 
@@ -270,14 +298,16 @@ func downloadURL(client *telegram.Client, m *telegram.NewMessage, rawURL string,
 			pct = float64(d) / float64(total) * 100
 		}
 		text := fmt.Sprintf("⬇️ `%s`\n%s / %s · %.1f%% · %s/s",
-			name, downloader.FormatBytes(d), downloader.FormatBytes(total), pct, downloader.FormatBytes(int64(bps)))
-		client.EditMessage(m.ChatID(), status.ID, text, sendOpts())
+			escapeMd(name), downloader.FormatBytes(d), downloader.FormatBytes(total), pct, downloader.FormatBytes(int64(bps)))
+		editStatus(client, chatID, status.ID, text)
 	}
 
 	res, err := downloader.ParallelDownload(ctx, rawURL, dst, parallel, 0, prog)
 	if err != nil {
 		if status != nil {
-			client.EditMessage(m.ChatID(), status.ID, fmt.Sprintf("❌ %v", err), sendOpts())
+			editStatus(client, chatID, status.ID, fmt.Sprintf("❌ %v", err))
+		} else {
+			sendText(client, chatID, fmt.Sprintf("❌ %v", err))
 		}
 		return
 	}
@@ -291,8 +321,10 @@ func downloadURL(client *telegram.Client, m *telegram.NewMessage, rawURL string,
 
 	trackFile(s, res.Path)
 	if status != nil {
-		client.EditMessage(m.ChatID(), status.ID, fmt.Sprintf("✅ saved `%s`\n%s · %s",
-			filepath.Base(res.Path), downloader.FormatBytes(res.Bytes), dir), sendOpts())
+		editStatus(client, chatID, status.ID, fmt.Sprintf("✅ saved `%s`\n%s · `%s`",
+			escapeMd(filepath.Base(res.Path)), downloader.FormatBytes(res.Bytes), escapeMd(dir)))
+	} else {
+		sendText(client, chatID, fmt.Sprintf("✅ saved `%s`", escapeMd(filepath.Base(res.Path))))
 	}
 }
 
@@ -302,17 +334,18 @@ func downloadDoc(client *telegram.Client, m *telegram.NewMessage, outRoot string
 		return
 	}
 	name := docFileName(doc)
+	chatID := m.ChatID()
 
-	s := getSession(m.ChatID(), outRoot)
+	s := getSession(chatID, outRoot)
 	dir := batchDir(s)
 	dstName := downloader.SanitizeFilename(name)
 	dst := filepath.Join(dir, dstName)
 
-	status, _ := m.Reply(fmt.Sprintf("⬇️ downloading `%s`…", dstName), sendOpts())
+	status, _ := sendText(client, chatID, fmt.Sprintf("⬇️ *downloading from telegram*\n`%s`", escapeMd(dstName)))
 
 	out, err := os.Create(dst)
 	if err != nil {
-		reply(client, m, fmt.Sprintf("❌ %v", err))
+		sendText(client, chatID, fmt.Sprintf("❌ %v", err))
 		return
 	}
 
@@ -329,23 +362,27 @@ func downloadDoc(client *telegram.Client, m *telegram.NewMessage, outRoot string
 			if pi.TotalSize > 0 {
 				pct = float64(pi.Current) / float64(pi.TotalSize) * 100
 			}
-			client.EditMessage(m.ChatID(), status.ID, fmt.Sprintf("⬇️ `%s`\n%s / %s · %.1f%%",
-				dstName, downloader.FormatBytes(pi.Current), downloader.FormatBytes(pi.TotalSize), pct), sendOpts())
+			editStatus(client, chatID, status.ID, fmt.Sprintf("⬇️ `%s`\n%s / %s · %.1f%%",
+				escapeMd(dstName), downloader.FormatBytes(pi.Current), downloader.FormatBytes(pi.TotalSize), pct))
 		},
 	})
 	out.Close()
 	if err != nil {
 		os.Remove(dst)
 		if status != nil {
-			client.EditMessage(m.ChatID(), status.ID, fmt.Sprintf("❌ %v", err), sendOpts())
+			editStatus(client, chatID, status.ID, fmt.Sprintf("❌ %v", err))
+		} else {
+			sendText(client, chatID, fmt.Sprintf("❌ %v", err))
 		}
 		return
 	}
 
 	trackFile(s, dst)
 	if status != nil {
-		client.EditMessage(m.ChatID(), status.ID, fmt.Sprintf("✅ saved `%s`\n%s · %s",
-			dstName, downloader.FormatBytes(doc.Size), dir), sendOpts())
+		editStatus(client, chatID, status.ID, fmt.Sprintf("✅ saved `%s`\n%s · `%s`",
+			escapeMd(dstName), downloader.FormatBytes(doc.Size), escapeMd(dir)))
+	} else {
+		sendText(client, chatID, fmt.Sprintf("✅ saved `%s`", escapeMd(dstName)))
 	}
 }
 

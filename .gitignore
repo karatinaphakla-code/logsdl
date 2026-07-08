@@ -1,0 +1,8 @@
+/logsdl
+*.exe
+!logsdl.exe
+
+downloads/
+.env
+.env.*
+!.env.example

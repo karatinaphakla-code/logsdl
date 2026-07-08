@@ -14,11 +14,12 @@ import (
 )
 
 func main() {
-	loadDotEnv()
+	root := initAppRoot()
+	loadDotEnv(filepath.Join(root, ".env"))
 
 	if len(os.Args) < 2 {
 		if hasEmbeddedCreds() {
-			runTelegram(nil)
+			runTelegram(root, nil)
 			return
 		}
 		printUsage()
@@ -27,9 +28,9 @@ func main() {
 
 	switch os.Args[1] {
 	case "url", "download":
-		runURL(os.Args[2:])
+		runURL(root, os.Args[2:])
 	case "tg", "telegram", "bot":
-		runTelegram(os.Args[2:])
+		runTelegram(root, os.Args[2:])
 	case "help", "-h", "--help":
 		printUsage()
 	default:
@@ -47,11 +48,11 @@ Usage:
   logsdl tg  [flags]
 
 URL flags:
-  -o dir       output directory (default: ./downloads)
+  -o dir       output directory (default: <exe-folder>/downloads)
   -p N         parallel connections (default: 8)
 
 Telegram flags:
-  -o dir       save downloads here (default: ./downloads)
+  -o dir       save downloads here (default: <exe-folder>/downloads)
   -p N         parallel connections for URL downloads (default: 8)
 
 Telegram commands (in bot DM):
@@ -70,9 +71,9 @@ Examples:
 `)
 }
 
-func runURL(args []string) {
+func runURL(root string, args []string) {
 	fs := flag.NewFlagSet("url", flag.ExitOnError)
-	outDir := fs.String("o", "./downloads", "output directory")
+	outDir := fs.String("o", defaultDownloadsDir(root), "output directory")
 	parallel := fs.Int("p", downloader.DefaultParallel, "parallel connections")
 	_ = fs.Parse(args)
 
@@ -129,8 +130,8 @@ func runURL(args []string) {
 		downloader.FormatBytes(res.Bytes), res.Duration, mbps, res.Parallel, res.RangeUsed)
 }
 
-func loadDotEnv() {
-	f, err := os.Open(".env")
+func loadDotEnv(path string) {
+	f, err := os.Open(path)
 	if err != nil {
 		return
 	}

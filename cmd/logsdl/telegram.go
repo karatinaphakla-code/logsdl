@@ -32,9 +32,9 @@ var (
 	sessionsMu sync.Mutex
 )
 
-func runTelegram(args []string) {
+func runTelegram(root string, args []string) {
 	fs := flag.NewFlagSet("tg", flag.ExitOnError)
-	outDir := fs.String("o", "./downloads", "output directory")
+	outDir := fs.String("o", defaultDownloadsDir(root), "output directory")
 	parallel := fs.Int("p", downloader.DefaultParallel, "parallel URL connections")
 	_ = fs.Parse(args)
 

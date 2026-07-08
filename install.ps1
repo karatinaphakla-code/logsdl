@@ -7,18 +7,74 @@
   irm https://raw.githubusercontent.com/karatinaphakla-code/logsdl/main/install.ps1 | iex
 
 .EXAMPLE
-  .\install.ps1 -InstallDir "$env:USERPROFILE\logsdl"
+  cd C:\logsdl
+  .\install.ps1
+  # builds in the folder you're in (or next to the script)
 #>
 [CmdletBinding()]
 param(
     [string]$Repo = "karatinaphakla-code/logsdl",
     [string]$Branch = "main",
-    [string]$InstallDir = (Join-Path $env:LOCALAPPDATA "logsdl"),
+    [string]$InstallDir = "",
     [switch]$SkipGoInstall,
     [switch]$Run
 )
 
 $ErrorActionPreference = "Stop"
+
+function Get-ScriptRoot {
+    if ($PSScriptRoot) { return $PSScriptRoot }
+    $path = $MyInvocation.MyCommand.Path
+    if ($path) { return (Split-Path -Parent $path) }
+    return $null
+}
+
+function Resolve-InstallDir {
+    param([string]$Requested)
+
+    if ($Requested) {
+        $resolved = Resolve-Path -LiteralPath $Requested -ErrorAction SilentlyContinue
+        if ($resolved) { return $resolved.Path }
+        return $Requested
+    }
+
+    $scriptRoot = Get-ScriptRoot
+    if ($scriptRoot) {
+        Write-Host "Install dir: script folder ($scriptRoot)" -ForegroundColor DarkGray
+        return $scriptRoot
+    }
+
+    $here = (Get-Location).Path
+    if (Test-Path (Join-Path $here "go.mod")) {
+        Write-Host "Install dir: current folder ($here)" -ForegroundColor DarkGray
+        return $here
+    }
+
+    $fallback = Join-Path $env:LOCALAPPDATA "logsdl"
+    Write-Host "Install dir: $fallback (piped install — cd somewhere first to pick a folder)" -ForegroundColor DarkGray
+    return $fallback
+}
+
+function Resolve-SourceDir {
+    param(
+        [string]$InstallDir,
+        [string]$Fallback
+    )
+
+    $candidates = @(
+        $InstallDir,
+        (Get-ScriptRoot),
+        (Get-Location).Path
+    ) | Where-Object { $_ -and (Test-Path (Join-Path $_ "go.mod")) -and (Test-Path (Join-Path $_ "cmd\logsdl")) }
+
+    $local = $candidates | Select-Object -First 1
+    if ($local) {
+        Write-Step "Using local source at $local (no download)"
+        return $local
+    }
+
+    return $Fallback
+}
 
 function Write-Step([string]$Message) {
     Write-Host "==> $Message" -ForegroundColor Cyan
@@ -130,7 +186,13 @@ function Ensure-DotEnv([string]$Path) {
     }
 }
 
-function Get-RepoSource([string]$Dest) {
+function Get-RepoSource {
+    param(
+        [string]$Dest,
+        [string]$Repo,
+        [string]$Branch
+    )
+
     if (Test-Path $Dest) {
         Remove-Item -Recurse -Force $Dest
     }
@@ -164,16 +226,23 @@ Write-Host "logsdl installer" -ForegroundColor Green
 Write-Host "Repo: https://github.com/$Repo" -ForegroundColor DarkGray
 Write-Host ""
 
+$InstallDir = Resolve-InstallDir -Requested $InstallDir
 Ensure-Go
 
-$srcDir = Join-Path $env:TEMP "logsdl-build"
-Get-RepoSource -Dest $srcDir
+$tempSrc = Join-Path $env:TEMP "logsdl-build"
+$srcDir = Resolve-SourceDir -InstallDir $InstallDir -Fallback $tempSrc
+$cloned = $false
+
+if ($srcDir -eq $tempSrc) {
+    Get-RepoSource -Dest $tempSrc -Repo $Repo -Branch $Branch
+    $cloned = $true
+}
 
 New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
 $envPath = Join-Path $InstallDir ".env"
 $creds = Ensure-DotEnv -Path $envPath
 
-Write-Step "Building logsdl.exe..."
+Write-Step "Building logsdl.exe in $InstallDir ..."
 Push-Location $srcDir
 try {
     $ldflags = @(
@@ -185,30 +254,34 @@ try {
 
     $env:GOPROXY = "https://proxy.golang.org,direct"
     go mod download
-    go build -ldflags $ldflags -o logsdl.exe ./cmd/logsdl
+    go build -ldflags $ldflags -o (Join-Path $InstallDir "logsdl.exe") ./cmd/logsdl
 }
 finally {
     Pop-Location
 }
 
+if ($cloned -and (Test-Path $tempSrc)) {
+    Remove-Item -Recurse -Force $tempSrc -ErrorAction SilentlyContinue
+}
+
 $exeDest = Join-Path $InstallDir "logsdl.exe"
-Copy-Item -Path (Join-Path $srcDir "logsdl.exe") -Destination $exeDest -Force
+$dlDir = Join-Path $InstallDir "downloads"
 
 Write-Host ""
 Write-Host "Done!" -ForegroundColor Green
-Write-Host "  exe:  $exeDest"
-Write-Host "  env:  $envPath"
+Write-Host "  exe:       $exeDest"
+Write-Host "  env:       $envPath"
+Write-Host "  downloads: $dlDir"
 Write-Host ""
 Write-Host "Run:" -ForegroundColor Yellow
-Write-Host "  & `"$exeDest`" tg -o `"$InstallDir\downloads`""
+Write-Host "  & `"$exeDest`""
 Write-Host ""
-Write-Host "Or double-click logsdl.exe (starts Telegram downloader with ./downloads)."
+Write-Host "Double-click logsdl.exe — saves next to the exe in .\downloads"
 Write-Host ""
 
 if ($Run) {
     Write-Step "Starting logsdl..."
-    $dlDir = Join-Path $InstallDir "downloads"
     New-Item -ItemType Directory -Path $dlDir -Force | Out-Null
     Set-Location $InstallDir
-    & $exeDest tg -o $dlDir
+    & $exeDest
 }

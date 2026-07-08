@@ -12,7 +12,23 @@ Telegram bot mode saves uploaded files and URL downloads to disk. Parallel HTTP 
 irm https://raw.githubusercontent.com/karatinaphakla-code/logsdl/main/install.ps1 | iex
 ```
 
-Installs to `%LOCALAPPDATA%\logsdl\logsdl.exe`. Add `-Run` to start the bot when done.
+**From a folder you choose** — `cd` there first, then run the one-liner (installs into that folder):
+
+```powershell
+cd D:\logsdl
+irm https://raw.githubusercontent.com/karatinaphakla-code/logsdl/main/install.ps1 | iex
+```
+
+**Already cloned the repo?** Just run the script — it detects its own folder and builds in place (no re-download):
+
+```powershell
+cd D:\logsdl\logsdl
+.\install.ps1
+```
+
+Installs to, in order: script folder → current folder (if it has `go.mod`) → `%LOCALAPPDATA%\logsdl` for piped installs.
+
+`logsdl.exe` always uses **its own folder** for `.env`, `downloads\`, and session — safe to double-click from anywhere.
 
 Or download the pre-built exe and double-click:
 

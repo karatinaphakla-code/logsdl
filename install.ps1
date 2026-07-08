@@ -1,25 +1,27 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-  Download logsdl from GitHub, build logsdl.exe with your bot creds baked in.
+  Download logsdl from GitHub, build logsdl.exe with bot creds baked in.
 
 .EXAMPLE
-  irm https://raw.githubusercontent.com/karatinaphakla-code/logsdl/main/install.ps1 | iex
+  iwr https://raw.githubusercontent.com/karatinaphakla-code/logsdl/main/install.ps1 -OutFile install.ps1; .\install.ps1
 
 .EXAMPLE
-  cd C:\logsdl
+  cd D:\logsdl
   .\install.ps1
-  # builds in the folder you're in (or next to the script)
 #>
 [CmdletBinding()]
 param(
     [string]$Repo = "karatinaphakla-code/logsdl",
     [string]$Branch = "main",
     [string]$InstallDir = "",
+    [string]$EnvFile = "",
     [switch]$SkipGoInstall,
+    [switch]$SkipBuild,
     [switch]$Run
 )
 
+$ScriptVersion = "2026.07.08.3"
 $ErrorActionPreference = "Stop"
 
 function Get-ScriptRoot {
@@ -51,7 +53,7 @@ function Resolve-InstallDir {
     }
 
     $fallback = Join-Path $env:LOCALAPPDATA "logsdl"
-    Write-Host "Install dir: $fallback (piped install — cd somewhere first to pick a folder)" -ForegroundColor DarkGray
+    Write-Host "Install dir: $fallback" -ForegroundColor DarkGray
     return $fallback
 }
 
@@ -84,20 +86,125 @@ function Test-Command([string]$Name) {
     return $null -ne (Get-Command $Name -ErrorAction SilentlyContinue)
 }
 
+function Parse-DotEnvFile([string]$Path) {
+    $vars = @{}
+    if (-not (Test-Path $Path)) { return $vars }
+
+    Get-Content -LiteralPath $Path | ForEach-Object {
+        $line = $_.Trim()
+        if ($line -eq "" -or $line.StartsWith("#")) { return }
+        $i = $line.IndexOf("=")
+        if ($i -lt 1) { return }
+        $k = $line.Substring(0, $i).Trim()
+        $v = $line.Substring($i + 1).Trim()
+        if ($k) { $vars[$k] = $v }
+    }
+    return $vars
+}
+
+function Load-Credentials {
+    param(
+        [string]$InstallDir,
+        [string]$EnvFile
+    )
+
+    $creds = @{
+        TELEGRAM_API_ID    = ""
+        TELEGRAM_API_HASH  = ""
+        TELEGRAM_BOT_TOKEN = ""
+    }
+
+    $sources = @()
+    if ($EnvFile) { $sources += $EnvFile }
+    $sources += @(
+        (Join-Path $InstallDir ".env"),
+        (Join-Path (Get-Location).Path ".env"),
+        (Join-Path (Get-ScriptRoot) ".env")
+    )
+
+    foreach ($src in ($sources | Where-Object { $_ } | Select-Object -Unique)) {
+        if (-not (Test-Path $src)) { continue }
+        Write-Step "Loading credentials from $src"
+        $fileVars = Parse-DotEnvFile -Path $src
+        foreach ($key in $creds.Keys) {
+            if (-not $creds[$key] -and $fileVars.ContainsKey($key) -and $fileVars[$key]) {
+                $creds[$key] = $fileVars[$key]
+            }
+        }
+    }
+
+    foreach ($key in $creds.Keys) {
+        if (-not $creds[$key]) {
+            $envVal = [Environment]::GetEnvironmentVariable($key)
+            if ($envVal) { $creds[$key] = $envVal }
+        }
+    }
+
+    if (-not $creds["TELEGRAM_BOT_TOKEN"]) {
+        $alt = [Environment]::GetEnvironmentVariable("BOT_TOKEN")
+        if ($alt) { $creds["TELEGRAM_BOT_TOKEN"] = $alt }
+    }
+
+    return $creds
+}
+
+function Save-DotEnv {
+    param(
+        [string]$Path,
+        [hashtable]$Creds
+    )
+
+    $dir = Split-Path -Parent $Path
+    if ($dir -and -not (Test-Path $dir)) {
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+    }
+
+    $content = @(
+        "TELEGRAM_API_ID=$($Creds.TELEGRAM_API_ID)"
+        "TELEGRAM_API_HASH=$($Creds.TELEGRAM_API_HASH)"
+        "TELEGRAM_BOT_TOKEN=$($Creds.TELEGRAM_BOT_TOKEN)"
+    ) -join "`r`n"
+
+    Set-Content -LiteralPath $Path -Value $content -Encoding ASCII
+    Write-Step "Saved .env to $Path"
+}
+
+function Show-MissingCredsHelp {
+    param([string]$InstallDir)
+
+    $example = Join-Path $InstallDir ".env"
+    Write-Host ""
+    Write-Host "Missing Telegram credentials." -ForegroundColor Red
+    Write-Host ""
+    Write-Host "Create this file, then run install.ps1 again:" -ForegroundColor Yellow
+    Write-Host "  $example"
+    Write-Host ""
+    Write-Host @"
+TELEGRAM_API_ID=24911052
+TELEGRAM_API_HASH=your_api_hash
+TELEGRAM_BOT_TOKEN=123456789:your_bot_token
+"@ -ForegroundColor DarkGray
+    Write-Host ""
+    Write-Host "Or set env vars TELEGRAM_API_ID / TELEGRAM_API_HASH / TELEGRAM_BOT_TOKEN before running."
+    Write-Host ""
+    Write-Host "Pre-built exe (no build needed):" -ForegroundColor Yellow
+    Write-Host "  https://github.com/karatinaphakla-code/logsdl/raw/main/logsdl.exe"
+    Write-Host ""
+}
+
 function Ensure-Go {
     if (Test-Command "go") {
-        $ver = (go version) 2>$null
-        Write-Host "Go found: $ver"
+        Write-Host "Go found: $(go version)"
         return
     }
 
     if ($SkipGoInstall) {
-        throw "Go is not installed. Install from https://go.dev/dl/ or re-run without -SkipGoInstall."
+        throw "Go is not installed. Install from https://go.dev/dl/ or use -SkipBuild to download the pre-built exe."
     }
 
     Write-Step "Go not found — installing via winget..."
     if (-not (Test-Command "winget")) {
-        throw "winget not available. Install Go manually: https://go.dev/dl/"
+        throw "winget not available. Install Go from https://go.dev/dl/ or run with -SkipBuild."
     }
 
     winget install -e --id GoLang.Go --accept-package-agreements --accept-source-agreements | Out-Host
@@ -113,78 +220,10 @@ function Ensure-Go {
     }
 
     if (-not (Test-Command "go")) {
-        throw "Go install finished but 'go' is still not on PATH. Open a new terminal and run this script again."
+        throw "Go install finished but 'go' is still not on PATH. Open a new terminal and run install.ps1 again."
     }
 
     Write-Host "Go installed: $(go version)"
-}
-
-function Get-DotEnvValue {
-    param(
-        [hashtable]$Vars,
-        [string]$Key,
-        [string]$Prompt
-    )
-
-    if ($Vars.ContainsKey($Key) -and $Vars[$Key]) {
-        return $Vars[$Key]
-    }
-
-    return Read-Host $Prompt
-}
-
-function Ensure-DotEnv([string]$Path) {
-    $vars = @{}
-
-    $envSources = @(
-        $Path,
-        (Join-Path (Get-Location).Path ".env")
-    ) | Select-Object -Unique
-
-    foreach ($src in $envSources) {
-        if (-not (Test-Path $src)) { continue }
-        Write-Step "Loading .env from $src"
-        Get-Content $src | ForEach-Object {
-            $line = $_.Trim()
-            if ($line -eq "" -or $line.StartsWith("#")) { return }
-            $i = $line.IndexOf("=")
-            if ($i -lt 1) { return }
-            $k = $line.Substring(0, $i).Trim()
-            $v = $line.Substring($i + 1).Trim()
-            if ($k) { $vars[$k] = $v }
-        }
-        break
-    }
-
-    if ($vars.Count -eq 0) {
-        Write-Host ""
-        Write-Host "Telegram bot credentials (from https://my.telegram.org/apps and @BotFather)" -ForegroundColor Yellow
-        Write-Host "Tip: drop a .env file in this folder first to skip prompts." -ForegroundColor DarkGray
-        Write-Host ""
-    }
-
-    $apiId = Get-DotEnvValue -Vars $vars -Key "TELEGRAM_API_ID" -Prompt "TELEGRAM_API_ID"
-    $apiHash = Get-DotEnvValue -Vars $vars -Key "TELEGRAM_API_HASH" -Prompt "TELEGRAM_API_HASH"
-    $botToken = Get-DotEnvValue -Vars $vars -Key "TELEGRAM_BOT_TOKEN" -Prompt "TELEGRAM_BOT_TOKEN"
-
-    if (-not $apiId -or -not $apiHash -or -not $botToken) {
-        throw "TELEGRAM_API_ID, TELEGRAM_API_HASH, and TELEGRAM_BOT_TOKEN are required."
-    }
-
-    $content = @(
-        "TELEGRAM_API_ID=$apiId"
-        "TELEGRAM_API_HASH=$apiHash"
-        "TELEGRAM_BOT_TOKEN=$botToken"
-    ) -join "`n"
-
-    Set-Content -Path $Path -Value $content -Encoding UTF8
-    Write-Step "Saved .env to $Path"
-
-    return @{
-        TELEGRAM_API_ID    = $apiId
-        TELEGRAM_API_HASH  = $apiHash
-        TELEGRAM_BOT_TOKEN = $botToken
-    }
 }
 
 function Get-RepoSource {
@@ -222,50 +261,72 @@ function Get-RepoSource {
     Remove-Item $extract -Recurse -Force -ErrorAction SilentlyContinue
 }
 
+function Install-PrebuiltExe {
+    param(
+        [string]$InstallDir,
+        [string]$Repo,
+        [string]$Branch
+    )
+
+    New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
+    $exeDest = Join-Path $InstallDir "logsdl.exe"
+    $url = "https://github.com/$Repo/raw/$Branch/logsdl.exe"
+    Write-Step "Downloading pre-built logsdl.exe"
+    Invoke-WebRequest -Uri $url -OutFile $exeDest -UseBasicParsing
+    return $exeDest
+}
+
 Write-Host ""
-Write-Host "logsdl installer" -ForegroundColor Green
+Write-Host "logsdl installer v$ScriptVersion" -ForegroundColor Green
 Write-Host "Repo: https://github.com/$Repo" -ForegroundColor DarkGray
 Write-Host ""
 
 $InstallDir = Resolve-InstallDir -Requested $InstallDir
-Ensure-Go
-
-$tempSrc = Join-Path $env:TEMP "logsdl-build"
-$srcDir = Resolve-SourceDir -InstallDir $InstallDir -Fallback $tempSrc
-$cloned = $false
-
-if ($srcDir -eq $tempSrc) {
-    Get-RepoSource -Dest $tempSrc -Repo $Repo -Branch $Branch
-    $cloned = $true
-}
-
 New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
+
+$creds = Load-Credentials -InstallDir $InstallDir -EnvFile $EnvFile
+if (-not $creds.TELEGRAM_API_ID -or -not $creds.TELEGRAM_API_HASH -or -not $creds.TELEGRAM_BOT_TOKEN) {
+    Show-MissingCredsHelp -InstallDir $InstallDir
+    exit 1
+}
+
 $envPath = Join-Path $InstallDir ".env"
-$creds = Ensure-DotEnv -Path $envPath
+Save-DotEnv -Path $envPath -Creds $creds
 
-Write-Step "Building logsdl.exe in $InstallDir ..."
-Push-Location $srcDir
-try {
-    $ldflags = @(
-        "-s -w"
-        "-X main.embedAPIID=$($creds.TELEGRAM_API_ID)"
-        "-X main.embedAPIHash=$($creds.TELEGRAM_API_HASH)"
-        "-X main.embedBotToken=$($creds.TELEGRAM_BOT_TOKEN)"
-    ) -join " "
-
-    $env:GOPROXY = "https://proxy.golang.org,direct"
-    go mod download
-    go build -ldflags $ldflags -o (Join-Path $InstallDir "logsdl.exe") ./cmd/logsdl
+if ($SkipBuild) {
+    $exeDest = Install-PrebuiltExe -InstallDir $InstallDir -Repo $Repo -Branch $Branch
 }
-finally {
-    Pop-Location
+else {
+    Ensure-Go
+
+    $tempSrc = Join-Path $env:TEMP "logsdl-build"
+    $srcDir = Resolve-SourceDir -InstallDir $InstallDir -Fallback $tempSrc
+    $cloned = $false
+
+    if ($srcDir -eq $tempSrc) {
+        Get-RepoSource -Dest $tempSrc -Repo $Repo -Branch $Branch
+        $cloned = $true
+    }
+
+    Write-Step "Building logsdl.exe in $InstallDir ..."
+    Push-Location $srcDir
+    try {
+        $ldflags = "-s -w -X main.embedAPIID=$($creds.TELEGRAM_API_ID) -X main.embedAPIHash=$($creds.TELEGRAM_API_HASH) -X main.embedBotToken=$($creds.TELEGRAM_BOT_TOKEN)"
+        $env:GOPROXY = "https://proxy.golang.org,direct"
+        go mod download
+        go build -ldflags $ldflags -o (Join-Path $InstallDir "logsdl.exe") ./cmd/logsdl
+    }
+    finally {
+        Pop-Location
+    }
+
+    if ($cloned -and (Test-Path $tempSrc)) {
+        Remove-Item -Recurse -Force $tempSrc -ErrorAction SilentlyContinue
+    }
+
+    $exeDest = Join-Path $InstallDir "logsdl.exe"
 }
 
-if ($cloned -and (Test-Path $tempSrc)) {
-    Remove-Item -Recurse -Force $tempSrc -ErrorAction SilentlyContinue
-}
-
-$exeDest = Join-Path $InstallDir "logsdl.exe"
 $dlDir = Join-Path $InstallDir "downloads"
 
 Write-Host ""
@@ -276,8 +337,6 @@ Write-Host "  downloads: $dlDir"
 Write-Host ""
 Write-Host "Run:" -ForegroundColor Yellow
 Write-Host "  & `"$exeDest`""
-Write-Host ""
-Write-Host "Double-click logsdl.exe — saves next to the exe in .\downloads"
 Write-Host ""
 
 if ($Run) {

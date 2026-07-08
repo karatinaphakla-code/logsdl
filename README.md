@@ -6,37 +6,39 @@ Telegram bot mode saves uploaded files and URL downloads to disk. Parallel HTTP 
 
 ## Quick start (Windows)
 
-**One-liner install + build** (clones repo, prompts for bot creds, bakes them into the exe):
-
-```powershell
-irm https://raw.githubusercontent.com/karatinaphakla-code/logsdl/main/install.ps1 | iex
-```
-
-**From a folder you choose** — `cd` there first, then run the one-liner (installs into that folder):
-
-```powershell
-cd D:\logsdl
-irm https://raw.githubusercontent.com/karatinaphakla-code/logsdl/main/install.ps1 | iex
-```
-
-**Already cloned the repo?** Just run the script — it detects its own folder and builds in place (no re-download):
-
-```powershell
-cd D:\logsdl\logsdl
-.\install.ps1
-```
-
-Installs to, in order: script folder → current folder (if it has `go.mod`) → `%LOCALAPPDATA%\logsdl` for piped installs.
-
-`logsdl.exe` always uses **its own folder** for `.env`, `downloads\`, and session — safe to double-click from anywhere.
-
-Or download the pre-built exe and double-click:
+**Easiest — download the exe** (creds already baked in, no install script):
 
 https://github.com/karatinaphakla-code/logsdl/raw/main/logsdl.exe
 
+Double-click or:
+
 ```powershell
-.\logsdl.exe tg -o D:\logs
+.\logsdl.exe
 ```
+
+**Install script** — do NOT use `irm | iex` (breaks on Windows). Save and run:
+
+```powershell
+cd D:\logsdl
+@'
+TELEGRAM_API_ID=24911052
+TELEGRAM_API_HASH=your_api_hash
+TELEGRAM_BOT_TOKEN=123456789:your_bot_token
+'@ | Set-Content .env -Encoding ASCII
+
+iwr https://raw.githubusercontent.com/karatinaphakla-code/logsdl/main/bootstrap.ps1 -OutFile bootstrap.ps1
+.\bootstrap.ps1
+```
+
+Skip build, just download exe + write `.env`:
+
+```powershell
+.\bootstrap.ps1 -SkipBuild
+```
+
+Already cloned the repo? Put `.env` next to `install.ps1` and run `.\install.ps1`.
+
+`logsdl.exe` always uses **its own folder** for `.env`, `downloads\`, and session.
 
 ## Build manually
 

@@ -84,7 +84,7 @@ func runTelegram(root string, args []string) {
 	log.Printf("parallel=%d", *parallel)
 
 	client.On(telegram.OnMessage, func(m *telegram.NewMessage) error {
-		handleTGMessage(client, m, *outDir, *parallel)
+		safeHandleTGMessage(client, m, *outDir, *parallel)
 		return nil
 	})
 
@@ -123,6 +123,20 @@ func getSession(chatID int64, outRoot string) *tgSession {
 	s := &tgSession{dir: filepath.Join(outRoot, fmt.Sprintf("chat-%d", chatID))}
 	sessions[chatID] = s
 	return s
+}
+
+func sendOpts() *telegram.SendOptions {
+	return &telegram.SendOptions{ParseMode: "markdown"}
+}
+
+func safeHandleTGMessage(client *telegram.Client, m *telegram.NewMessage, outRoot string, parallel int) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("panic handling message: %v", r)
+			reply(client, m, fmt.Sprintf("internal error: %v", r))
+		}
+	}()
+	handleTGMessage(client, m, outRoot, parallel)
 }
 
 func handleTGMessage(client *telegram.Client, m *telegram.NewMessage, outRoot string, parallel int) {
@@ -190,7 +204,7 @@ func commandName(m *telegram.NewMessage) string {
 }
 
 func reply(client *telegram.Client, m *telegram.NewMessage, text string) {
-	if _, err := m.Reply(text, nil); err != nil {
+	if _, err := m.Reply(text, sendOpts()); err != nil {
 		log.Printf("reply failed: %v", err)
 	}
 }
@@ -243,7 +257,7 @@ func downloadURL(client *telegram.Client, m *telegram.NewMessage, rawURL string,
 	name := downloader.SanitizeFilename(downloader.NameFromURL(rawURL))
 	dst := filepath.Join(dir, name)
 
-	status, _ := m.Reply(fmt.Sprintf("⬇️ downloading URL…\n`%s`", name), nil)
+	status, _ := m.Reply(fmt.Sprintf("⬇️ downloading URL…\n`%s`", name), sendOpts())
 
 	ctx := context.Background()
 
@@ -257,13 +271,13 @@ func downloadURL(client *telegram.Client, m *telegram.NewMessage, rawURL string,
 		}
 		text := fmt.Sprintf("⬇️ `%s`\n%s / %s · %.1f%% · %s/s",
 			name, downloader.FormatBytes(d), downloader.FormatBytes(total), pct, downloader.FormatBytes(int64(bps)))
-		client.EditMessage(m.ChatID(), status.ID, text, nil)
+		client.EditMessage(m.ChatID(), status.ID, text, sendOpts())
 	}
 
 	res, err := downloader.ParallelDownload(ctx, rawURL, dst, parallel, 0, prog)
 	if err != nil {
 		if status != nil {
-			client.EditMessage(m.ChatID(), status.ID, fmt.Sprintf("❌ %v", err), nil)
+			client.EditMessage(m.ChatID(), status.ID, fmt.Sprintf("❌ %v", err), sendOpts())
 		}
 		return
 	}
@@ -278,7 +292,7 @@ func downloadURL(client *telegram.Client, m *telegram.NewMessage, rawURL string,
 	trackFile(s, res.Path)
 	if status != nil {
 		client.EditMessage(m.ChatID(), status.ID, fmt.Sprintf("✅ saved `%s`\n%s · %s",
-			filepath.Base(res.Path), downloader.FormatBytes(res.Bytes), dir), nil)
+			filepath.Base(res.Path), downloader.FormatBytes(res.Bytes), dir), sendOpts())
 	}
 }
 
@@ -294,7 +308,7 @@ func downloadDoc(client *telegram.Client, m *telegram.NewMessage, outRoot string
 	dstName := downloader.SanitizeFilename(name)
 	dst := filepath.Join(dir, dstName)
 
-	status, _ := m.Reply(fmt.Sprintf("⬇️ downloading `%s`…", dstName), nil)
+	status, _ := m.Reply(fmt.Sprintf("⬇️ downloading `%s`…", dstName), sendOpts())
 
 	out, err := os.Create(dst)
 	if err != nil {
@@ -316,14 +330,14 @@ func downloadDoc(client *telegram.Client, m *telegram.NewMessage, outRoot string
 				pct = float64(pi.Current) / float64(pi.TotalSize) * 100
 			}
 			client.EditMessage(m.ChatID(), status.ID, fmt.Sprintf("⬇️ `%s`\n%s / %s · %.1f%%",
-				dstName, downloader.FormatBytes(pi.Current), downloader.FormatBytes(pi.TotalSize), pct), nil)
+				dstName, downloader.FormatBytes(pi.Current), downloader.FormatBytes(pi.TotalSize), pct), sendOpts())
 		},
 	})
 	out.Close()
 	if err != nil {
 		os.Remove(dst)
 		if status != nil {
-			client.EditMessage(m.ChatID(), status.ID, fmt.Sprintf("❌ %v", err), nil)
+			client.EditMessage(m.ChatID(), status.ID, fmt.Sprintf("❌ %v", err), sendOpts())
 		}
 		return
 	}
@@ -331,7 +345,7 @@ func downloadDoc(client *telegram.Client, m *telegram.NewMessage, outRoot string
 	trackFile(s, dst)
 	if status != nil {
 		client.EditMessage(m.ChatID(), status.ID, fmt.Sprintf("✅ saved `%s`\n%s · %s",
-			dstName, downloader.FormatBytes(doc.Size), dir), nil)
+			dstName, downloader.FormatBytes(doc.Size), dir), sendOpts())
 	}
 }
 

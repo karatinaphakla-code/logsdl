@@ -6,19 +6,35 @@ Telegram bot mode saves uploaded files and URL downloads to disk. Parallel HTTP 
 
 ## Quick start (Windows)
 
-Download **`logsdl.exe`** from this repo (credentials baked in) and double-click, or:
+**One-liner install + build** (clones repo, prompts for bot creds, bakes them into the exe):
+
+```powershell
+irm https://raw.githubusercontent.com/karatinaphakla-code/logsdl/main/install.ps1 | iex
+```
+
+Installs to `%LOCALAPPDATA%\logsdl\logsdl.exe`. Add `-Run` to start the bot when done.
+
+Or download the pre-built exe and double-click:
+
+https://github.com/karatinaphakla-code/logsdl/raw/main/logsdl.exe
 
 ```powershell
 .\logsdl.exe tg -o D:\logs
 ```
 
-## Build
+## Build manually
 
 ```bash
 go build -o logsdl ./cmd/logsdl
 ```
 
-Windows exe with embedded bot credentials (reads `.env`):
+Windows exe with embedded bot credentials:
+
+```powershell
+.\install.ps1 -InstallDir C:\logsdl
+```
+
+Linux/macOS (reads `.env`):
 
 ```bash
 bash build-logsdl-windows.sh

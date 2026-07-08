@@ -123,19 +123,11 @@ function Get-DotEnvValue {
     param(
         [hashtable]$Vars,
         [string]$Key,
-        [string]$Prompt,
-        [switch]$Secret
+        [string]$Prompt
     )
 
     if ($Vars.ContainsKey($Key) -and $Vars[$Key]) {
         return $Vars[$Key]
-    }
-
-    if ($Secret) {
-        $secure = Read-Host $Prompt
-        return [Runtime.InteropServices.Marshal]::PtrToStringAuto(
-            [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
-        )
     }
 
     return Read-Host $Prompt
@@ -144,9 +136,15 @@ function Get-DotEnvValue {
 function Ensure-DotEnv([string]$Path) {
     $vars = @{}
 
-    if (Test-Path $Path) {
-        Write-Step "Using existing .env at $Path"
-        Get-Content $Path | ForEach-Object {
+    $envSources = @(
+        $Path,
+        (Join-Path (Get-Location).Path ".env")
+    ) | Select-Object -Unique
+
+    foreach ($src in $envSources) {
+        if (-not (Test-Path $src)) { continue }
+        Write-Step "Loading .env from $src"
+        Get-Content $src | ForEach-Object {
             $line = $_.Trim()
             if ($line -eq "" -or $line.StartsWith("#")) { return }
             $i = $line.IndexOf("=")
@@ -155,16 +153,19 @@ function Ensure-DotEnv([string]$Path) {
             $v = $line.Substring($i + 1).Trim()
             if ($k) { $vars[$k] = $v }
         }
+        break
     }
-    else {
+
+    if ($vars.Count -eq 0) {
         Write-Host ""
         Write-Host "Telegram bot credentials (from https://my.telegram.org/apps and @BotFather)" -ForegroundColor Yellow
+        Write-Host "Tip: drop a .env file in this folder first to skip prompts." -ForegroundColor DarkGray
         Write-Host ""
     }
 
     $apiId = Get-DotEnvValue -Vars $vars -Key "TELEGRAM_API_ID" -Prompt "TELEGRAM_API_ID"
     $apiHash = Get-DotEnvValue -Vars $vars -Key "TELEGRAM_API_HASH" -Prompt "TELEGRAM_API_HASH"
-    $botToken = Get-DotEnvValue -Vars $vars -Key "TELEGRAM_BOT_TOKEN" -Prompt "TELEGRAM_BOT_TOKEN" -Secret
+    $botToken = Get-DotEnvValue -Vars $vars -Key "TELEGRAM_BOT_TOKEN" -Prompt "TELEGRAM_BOT_TOKEN"
 
     if (-not $apiId -or -not $apiHash -or -not $botToken) {
         throw "TELEGRAM_API_ID, TELEGRAM_API_HASH, and TELEGRAM_BOT_TOKEN are required."
